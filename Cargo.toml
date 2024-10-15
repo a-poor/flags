@@ -1,0 +1,19 @@
+[package]
+name = "flags"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.89"
+axum = "0.7.7"
+base64 = "0.22.1"
+clap = { version = "4.5.20", features = ["derive", "env"] }
+getrandom = "0.2.15"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
+sha2 = "0.10.8"
+tokio = { version = "1.40.0", features = ["full"] }
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+validator = { version = "0.18.1", features = ["derive"] }
