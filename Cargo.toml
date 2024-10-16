@@ -5,11 +5,13 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.89"
-axum = "0.7.7"
+axum = { version = "0.7.7", features = ["macros"] }
+axum-extra = { version = "0.9.4", features = ["typed-header"] }
 base64 = "0.22.1"
 chrono = "0.4.38"
 clap = { version = "4.5.20", features = ["derive", "env"] }
 getrandom = "0.2.15"
+headers = "0.4.0"
 nanoid = "0.4.0"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0.210", features = ["derive"] }

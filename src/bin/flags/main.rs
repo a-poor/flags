@@ -1,12 +1,11 @@
 use std::sync::{Arc, Mutex};
+use axum::response::{IntoResponse, Response};
 use clap::Parser;
-use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use serde::{Serialize, Deserialize};
+use anyhow::anyhow;
 use axum::{Json, Router};
 use axum::routing::get;
 use axum::http::StatusCode;
-use axum::http::header::HeaderMap;
 use axum::extract::{
     Request,
     Path,
@@ -14,6 +13,9 @@ use axum::extract::{
     State,
     Json as JsonBody,
 };
+use headers::Authorization;
+use headers::authorization::Bearer;
+use axum_extra::TypedHeader;
 use rusqlite::Connection;
 use sha2::{Sha256, Digest};
 use base64::engine::Engine;
@@ -60,7 +62,7 @@ struct Flag {
 }
 
 impl AppState {
-    fn connect(args: &Args) -> Result<Self> {
+    fn connect(args: &Args) -> anyhow::Result<Self> {
         let db = get_db_connection(&args.db_path)?;
         let admin_token_hash = hash_key(&args.admin_token);
         Ok(Self {
@@ -69,47 +71,47 @@ impl AppState {
         })
     }
 
-    fn list_users(&self) -> Result<Vec<Account>> {
+    fn list_users(&self) -> anyhow::Result<Vec<Account>> {
         unimplemented!()
     }
 
-    fn create_users(&self, key: &str, desc: &str) -> Result<Account> {
+    fn create_users(&self, key: &str, desc: &str) -> anyhow::Result<Account> {
         unimplemented!()
     }
 
-    fn get_user(&self, id: &str) -> Result<Option<Account>> {
+    fn get_user(&self, id: &str) -> anyhow::Result<Option<Account>> {
         unimplemented!()
     }
 
-    fn get_user_by_key(&self, key: &str) -> Result<Option<Account>> {
+    fn get_user_by_key(&self, key: &str) -> anyhow::Result<Option<Account>> {
         unimplemented!()
     }
 
-    fn update_user(&self, id: &str, key: Option<String>, desc: Option<String>) -> Result<()> {
+    fn update_user(&self, id: &str, key: Option<String>, desc: Option<String>) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    fn delete_user(&self, id: &str) -> Result<()> {
+    fn delete_user(&self, id: &str) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    fn list_flags(&self) -> Result<Vec<Flag>> {
+    fn list_flags(&self) -> anyhow::Result<Vec<Flag>> {
         unimplemented!()
     }
 
-    fn create_flag(&self, key: &str, value: Value, desc: &str) -> Result<Flag> {
+    fn create_flag(&self, key: &str, value: Value, desc: &str) -> anyhow::Result<Flag> {
         unimplemented!()
     }
 
-    fn get_flag(&self, key: &str) -> Result<Option<Flag>> {
+    fn get_flag(&self, key: &str) -> anyhow::Result<Option<Flag>> {
         unimplemented!()
     }
 
-    fn update_flag(&self, key: Option<String>, value: Option<Value>, desc: Option<String>) -> Result<()> {
+    fn update_flag(&self, key: Option<String>, value: Option<Value>, desc: Option<String>) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    fn delete_flag(&self, key: &str) -> Result<()> {
+    fn delete_flag(&self, key: &str) -> anyhow::Result<()> {
         unimplemented!()
     }
 }
@@ -123,7 +125,7 @@ fn hash_key(key: &str) -> String {
         .collect::<String>()
 }
 
-fn get_db_connection(path: &str) -> Result<Connection> {
+fn get_db_connection(path: &str) -> anyhow::Result<Connection> {
     // Does the path exist? If yes, open and return...
     if path != ":memory:" && std::path::Path::new(&path).exists() {
         // TODO - Check that the required tables exist
@@ -169,6 +171,31 @@ fn get_db_connection(path: &str) -> Result<Connection> {
     Ok(db)
 }
 
+type AppResult<T> = Result<T, AppError>;
+
+struct AppError(anyhow::Error);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "message": self.0.to_string(),
+            })),
+        ).into_response()
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(e: E) -> Self {
+        Self(e.into())
+    }
+}
+
 enum AuthResult {
     NoAuthHeader,
     NonBearerAuth,
@@ -176,7 +203,8 @@ enum AuthResult {
     Token(String),
 }
 
-fn get_auth_key(headers: &HeaderMap) -> AuthResult {
+fn get_auth_key<T>(req: &Request<T>) -> AuthResult {
+    let headers = req.headers();
     let auth_header = match headers.get("Authorization") {
         None => return AuthResult::NoAuthHeader,
         Some(h) => h,
@@ -198,13 +226,14 @@ fn get_auth_key(headers: &HeaderMap) -> AuthResult {
     AuthResult::Token(hash_key(key))
 }
 
+#[axum::debug_handler]
 async fn list_accounts(
     State(state): State<Arc<Mutex<AppState>>>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<Value>)> {
+    request: Request<axum::body::Bytes>,
+) -> AppResult<(StatusCode, Json<Value>)> {
     // Get the request token
-    let token = match get_auth_key(&headers) {
-        AuthResult::Token(t) => t,
+    let token = match get_auth_key(&request) {
+        AuthResult::Token(t) => hash_key(&t),
         _ => return Ok((
             StatusCode::UNAUTHORIZED,
             Json(json!({
@@ -224,7 +253,7 @@ async fn list_accounts(
                 "message": "Unauthorized",
             }))
         )),
-        Some(_) => {},
+        _ => {},
     };
 
     // Get the list of users
@@ -283,7 +312,7 @@ async fn delete_flag() -> (StatusCode, Json<Value>) {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     // Parse and validate the input arguments
     let args = Args::parse();
 
