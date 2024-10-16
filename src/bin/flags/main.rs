@@ -116,7 +116,11 @@ impl AppState {
 
 fn hash_key(key: &str) -> String {
     let d = Sha256::digest(key);
-    URL_SAFE.encode(d)
+    URL_SAFE
+        .encode(d)
+        .chars()
+        .take(32)
+        .collect::<String>()
 }
 
 fn get_db_connection(path: &str) -> Result<Connection> {
