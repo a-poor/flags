@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use axum::response::{IntoResponse, Response};
 use clap::Parser;
 use serde_json::{json, Value};
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use axum::{Json, Router};
 use axum::routing::get;
 use axum::http::StatusCode;
@@ -48,8 +48,8 @@ struct Account {
     id: String,
     key_hash: String,
     desc: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -57,8 +57,8 @@ struct Flag {
     key: String,
     value: Value,
     desc: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    created_at: String,
+    updated_at: String,
 }
 
 impl AppState {
@@ -72,7 +72,21 @@ impl AppState {
     }
 
     fn list_users(&self) -> anyhow::Result<Vec<Account>> {
-        unimplemented!()
+        let mut stmt = self.db.prepare("SELECT id, key_hash, desc, created_at, updated_at FROM accounts")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Account {
+                id: row.get(0)?,
+                key_hash: row.get(1)?,
+                desc: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        let mut users = Vec::new();
+        for row in rows {
+            users.push(row?);
+        }
+        Ok(users)
     }
 
     fn create_users(&self, key: &str, desc: &str) -> anyhow::Result<Account> {
@@ -81,6 +95,17 @@ impl AppState {
 
     fn get_user(&self, id: &str) -> anyhow::Result<Option<Account>> {
         unimplemented!()
+    }
+
+    fn validate_user(&self, key: &str) -> anyhow::Result<bool> {
+        let key_hash = hash_key(key);
+        if key_hash == self.admin_token_hash {
+            return Ok(true);
+        }
+        match self.get_user_by_key(&key)? {
+            None => Ok(false),
+            Some(_) => Ok(true),
+        }
     }
 
     fn get_user_by_key(&self, key: &str) -> anyhow::Result<Option<Account>> {
@@ -96,7 +121,33 @@ impl AppState {
     }
 
     fn list_flags(&self) -> anyhow::Result<Vec<Flag>> {
-        unimplemented!()
+        let mut stmt = self.db.prepare("SELECT key, value, desc, created_at, updated_at FROM accounts")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Flag {
+                key: row.get(0)?,
+                value: Value::String(row.get(1)?),
+                desc: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        let mut flags = Vec::new();
+        for row in rows {
+            let row = row?;
+            let value = match &row.value {
+                Value::String(s) => s.clone(),
+                _ => return Err(anyhow!("Invalid value type")),
+            };
+            let value = serde_json::from_str(&value)?;
+            flags.push(Flag {
+                key: row.key,
+                value,
+                desc: row.desc,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+            });
+        }
+        Ok(flags)
     }
 
     fn create_flag(&self, key: &str, value: Value, desc: &str) -> anyhow::Result<Flag> {
@@ -229,32 +280,31 @@ fn get_auth_key<T>(req: &Request<T>) -> AuthResult {
 #[axum::debug_handler]
 async fn list_accounts(
     State(state): State<Arc<Mutex<AppState>>>,
-    request: Request<axum::body::Bytes>,
+    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
 ) -> AppResult<(StatusCode, Json<Value>)> {
     // Get the request token
-    let token = match get_auth_key(&request) {
-        AuthResult::Token(t) => hash_key(&t),
-        _ => return Ok((
+    let token = match auth.token() {
+        "" => return Ok((
             StatusCode::UNAUTHORIZED,
             Json(json!({
                 "success": false,
                 "message": "Unauthorized",
             }))
         )),
+        t => t,
     };
 
     // Get the user
-    let state = state.lock().map_err(|_| anyhow!("Failed to lock state"))?;
-    match state.get_user_by_key(&token)? {
-        None => return Ok((
+    let state = state.lock().unwrap();
+    if !state.validate_user(&token)? {
+         return Ok((
             StatusCode::UNAUTHORIZED,
             Json(json!({
                 "success": false,
                 "message": "Unauthorized",
             }))
-        )),
-        _ => {},
-    };
+        ));
+    }
 
     // Get the list of users
     let data = state
@@ -263,8 +313,8 @@ async fn list_accounts(
         .map(|u| json!({
             "id": u.id.clone(),
             "desc": u.desc.clone(),
-            "created_at": u.created_at.to_rfc3339(),
-            "updated_at": u.updated_at.to_rfc3339(),
+            "created_at": u.created_at,
+            "updated_at": u.updated_at,
         }))
         .collect::<Vec<_>>();
 
